@@ -55,7 +55,6 @@ class IvimTensorModel(ReconstModel):
         diffusion_data = data[self.diffusion_idx]
         self.diffusion_fit = self.diffusion_model.fit(diffusion_data, mask)
         self.q_initial = lower_triangular(self.diffusion_fit.quadratic_form)
-        print(self.diffusion_fit.md)
         perfusion_data = data[self.perfusion_idx]
         self.perfusion_fit = self.perfusion_model.fit(perfusion_data, mask)
         self.q_star_initial = lower_triangular(self.perfusion_fit.quadratic_form).squeeze()
@@ -69,16 +68,21 @@ class IvimTensorModel(ReconstModel):
         # a perfusion fraction that works for the other parameters
         for ii, perfusion_fraction in enumerate(fractions_for_probe):
             self.perfusion_fraction = perfusion_fraction
-            popt, pcov = curve_fit(self.model_eq1,  self.gtab.bvals, data, p0=initial)
-            err = np.sum(np.power(self.model_eq1(self.gtab.bvals, *popt) - data, 2))
-            self.fits[ii] = popt
-            self.errs[ii] = err
-            self.beta[ii] = perfusion_fraction
-
+            try:
+                popt, pcov = curve_fit(self.model_eq1,  self.gtab.bvals, data, p0=initial)
+                err = np.sum(np.power(self.model_eq1(self.gtab.bvals, *popt) - data, 2))
+                self.fits[ii] = popt
+                self.errs[ii] = err
+                self.beta[ii] = perfusion_fraction
+            except RuntimeError: 
+                self.fits[ii] = np.nan
+                self.errs[ii] = np.inf
+                self.beta[ii] = np.nan
+                
         min_err = np.argmin(self.errs)
         initial = np.hstack([self.beta[min_err], self.fits[min_err]])
         popt, pcov = curve_fit(self.model_eq2,  self.gtab.bvals, data, p0=initial, 
-        bounds=((0, -np.inf, -np.inf, -np.inf, -np.inf, -np.inf, -np.inf, -np.inf, -np.inf, -np.inf, -np.inf, -np.inf, -np.inf),                   (1, np.inf, np.inf, np.inf, np.inf, np.inf, np.inf, np.inf, np.inf, np.inf, np.inf, np.inf, np.inf)))
+        bounds=((0, -np.inf, -np.inf, -np.inf, -np.inf, -np.inf, -np.inf, -np.inf, -np.inf, -np.inf, -np.inf, -np.inf, -np.inf),                     (1, np.inf, np.inf, np.inf, np.inf, np.inf, np.inf, np.inf, np.inf, np.inf, np.inf, np.inf, np.inf)))
         return IvimTensorFit(self, popt)
         
                             
