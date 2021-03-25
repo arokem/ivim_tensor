@@ -117,10 +117,11 @@ class IvimTensorModel(ReconstModel):
         
         # Instead of estimating perfusion_fraction directly, we start by finding 
         # a perfusion fraction that works for the other parameters
+        relative_data = data / data[self.gtab.b0s_mask]
         for ii, perfusion_fraction in enumerate(fractions_for_probe):
             self.perfusion_fraction = perfusion_fraction
             try:
-                popt, pcov = curve_fit(self.model_eq1,  self.gtab.bvals, data, p0=initial, 
+                popt, pcov = curve_fit(self.model_eq1,  self.gtab.bvals, relative_data, p0=initial, 
                                       bounds=(lb[1:], ub[1:]))
                 err = np.sum(np.power(self.model_eq1(self.gtab.bvals, *popt) - data, 2))
                 self.fits[ii] = popt
@@ -134,7 +135,8 @@ class IvimTensorModel(ReconstModel):
         min_err = np.argmin(self.errs)
         initial = np.hstack([self.beta[min_err], self.fits[min_err]])
         
-        popt, pcov = curve_fit(self.model_eq2,  self.gtab.bvals, data, p0=initial, bounds=(lb, ub))
+        popt, pcov = curve_fit(self.model_eq2,  self.gtab.bvals, relative_data, p0=initial, bounds=(lb, ub))
+        #popt, pcov = curve_fit(self.model_eq2,  self.gtab.bvals, data, p0=initial, bounds=(lb, ub))
         return IvimTensorFit(self, popt)
         
                             
@@ -144,10 +146,18 @@ class IvimTensorFit(ReconstFit):
     def __init__(self, model, model_params):
         self.model = model
         self.model_params = model_params
+        self.perfusion_fraction = model_params[0]
         tensor_evals, tensor_evecs = decompose_tensor(from_lower_triangular(self.model_params[1:7]))
         tensor_params = np.hstack([tensor_evals, tensor_evecs.ravel()])
         perfusion_evals, perfusion_evecs = decompose_tensor(from_lower_triangular(self.model_params[7:]))
         perfusion_params = np.hstack([perfusion_evals, perfusion_evecs.ravel()])
         self.diffusion_fit = TensorFit(self.model.diffusion_model, tensor_params)
         self.perfusion_fit = TensorFit(self.model.perfusion_model, perfusion_params)
-        self.perfusion_fraction = np.min([model_params[0], 1 - model_params[0]])
+        
+      
+    def predict(self, gtab, s0=1):
+        bvecs = gtab.bvecs
+        b = gtab.bvals
+        Q = self.diffusion_fit.quadratic_form
+        Q_star = self.perfusion_fit.quadratic_form
+        return _ivim_tensor_equation(self.perfusion_fraction, b, bvecs, Q_star, Q)
