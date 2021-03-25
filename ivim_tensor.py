@@ -117,25 +117,27 @@ class IvimTensorModel(ReconstModel):
         rar[:3, :3] = rodrigues_axis_rotation(self.perfusion_fit.evecs[0], np.rad2deg(ang1))
         scale, shear, angles_perfusion, translate, perspective = decompose_matrix(em @ rar)
 
-        self.perfusion_fraction = ivim_fit.perfusion_fraction 
+        # self.perfusion_fraction = 
         # XXX TODO: Need to make sure that evals are sorted 
         # so that largest is first *after the fitting*
-        initial = [self.diffusion_fit.evals[0], 
-                   self.diffusion_fit.evals[1], 
-                   self.diffusion_fit.evals[2], 
-                   angles_dti[0],
-                   angles_dti[1],
-                   angles_dti[2],
-                   self.perfusion_fit.evals[0], 
-                   self.perfusion_fit.evals[1], 
-                   self.perfusion_fit.evals[2], 
-                   angles_perfusion[0],
-                   angles_perfusion[1],
-                   angles_perfusion[2]                  ]
+        initial = [
+            ivim_fit.perfusion_fraction, 
+            self.diffusion_fit.evals[0], 
+            self.diffusion_fit.evals[1], 
+            self.diffusion_fit.evals[2], 
+            angles_dti[0],
+            angles_dti[1],
+            angles_dti[2],
+            self.perfusion_fit.evals[0], 
+            self.perfusion_fit.evals[1], 
+            self.perfusion_fit.evals[2], 
+            angles_perfusion[0],
+            angles_perfusion[1],
+            angles_perfusion[2]]
         
-        lb = (0, 0, 0, -np.pi, -np.pi, -np.pi, 0, 0, 0, -np.pi, -np.pi, -np.pi)
-        ub = (0.004, 0.004, 0.004, np.pi, np.pi, np.pi, 0.2, 0.2, 0.2, np.pi, np.pi, np.pi)
-        popt, pcov = curve_fit(self.model_eq1,
+        lb = (0, 0, 0, 0, -np.pi, -np.pi, -np.pi, 0, 0, 0, -np.pi, -np.pi, -np.pi)
+        ub = (0.5, 0.004, 0.004, 0.004, np.pi, np.pi, np.pi, 0.2, 0.2, 0.2, np.pi, np.pi, np.pi)
+        popt, pcov = curve_fit(self.model_eq2,
                                self.gtab.bvals, 
                                data/np.mean(data[self.gtab.b0s_mask]), 
                                p0=initial, bounds=(lb, ub))
@@ -147,13 +149,13 @@ class IvimTensorFit(ReconstFit):
     def __init__(self, model, model_params):
         self.model = model
         self.model_params = model_params
-        tensor_evecs, tensor_evals = _reconstruct_tensor(*self.model_params[:6])        
+        self.perfusion_fraction = self.model_params[0]
+        tensor_evecs, tensor_evals = _reconstruct_tensor(*self.model_params[1:7])        
         tensor_params = np.hstack([tensor_evals, tensor_evecs.ravel()])
-        perfusion_evecs, perfusion_evals = _reconstruct_tensor(*self.model_params[6:])
+        perfusion_evecs, perfusion_evals = _reconstruct_tensor(*self.model_params[7:])
         perfusion_params = np.hstack([perfusion_evals, perfusion_evecs.ravel()])
         self.diffusion_fit = TensorFit(self.model.diffusion_model, tensor_params)
         self.perfusion_fit = TensorFit(self.model.perfusion_model, perfusion_params)
-        self.perfusion_fraction = self.model.perfusion_fraction
     
     def predict(self, gtab, s0=1):
         bvecs = gtab.bvecs
