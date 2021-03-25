@@ -118,6 +118,8 @@ class IvimTensorModel(ReconstModel):
         scale, shear, angles_perfusion, translate, perspective = decompose_matrix(em @ rar)
 
         self.perfusion_fraction = ivim_fit.perfusion_fraction 
+        # XXX TODO: Need to make sure that evals are sorted 
+        # so that largest is first *after the fitting*
         initial = [self.diffusion_fit.evals[0], 
                    self.diffusion_fit.evals[1], 
                    self.diffusion_fit.evals[2], 
@@ -131,8 +133,8 @@ class IvimTensorModel(ReconstModel):
                    angles_perfusion[1],
                    angles_perfusion[2]                  ]
         
-        lb = (0, 0, 0, -np.inf, -np.inf, -np.inf, 0, 0, 0, -np.inf, -np.inf, -np.inf)
-        ub = (0.004, 0.004, 0.004, np.inf, np.inf, np.inf, 0.2, 0.2, 0.2, np.inf, np.inf, np.inf)
+        lb = (0, 0, 0, -np.pi, -np.pi, -np.pi, 0, 0, 0, -np.pi, -np.pi, -np.pi)
+        ub = (0.004, 0.004, 0.004, np.pi, np.pi, np.pi, 0.2, 0.2, 0.2, np.pi, np.pi, np.pi)
         popt, pcov = curve_fit(self.model_eq1,
                                self.gtab.bvals, 
                                data/np.mean(data[self.gtab.b0s_mask]), 
