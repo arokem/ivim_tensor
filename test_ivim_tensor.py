@@ -104,10 +104,13 @@ def test_ivim_tensor():
 
     angles = [(90, 0), (90, 0)]
     itm = IvimTensorModel(gtab)
-    betas = np.arange(0, 0.3, 0.05)
+    betas = np.arange(0.05, 0.3, 0.05)
     for ii in range(len(betas)):
-        sim = multi_tensor(gtab, mevals=mevals, snr=1000, fractions=[100 * (1-betas[ii]), 
+        sim = multi_tensor(gtab, mevals=mevals, snr=100, fractions=[100 * (1-betas[ii]), 
                                                                      betas[ii] * 100])[0]
         itf = itm.fit(np.array([sim]))
         
-        assert np.allclose(itf.perfusion_fraction, betas[ii], atol=7)
+        assert np.allclose(itf.perfusion_fraction, betas[ii], atol=1e-2)
+        
+        prediction = itf.predict(gtab)
+        assert np.allclose(prediction, sim, atol=0.05)
