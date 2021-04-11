@@ -113,7 +113,7 @@ class IvimTensorModel(ReconstModel):
             angles_dti = calc_euler(dt_evecs)
             perfusion_evecs = self.perfusion_fit.evecs[vox]
             angles_perfusion = calc_euler(perfusion_evecs)
-            ivim_pf = np.max([ivim_fit.perfusion_fraction[vox], 0.001])
+            ivim_pf = np.max([self.ivim_fit.perfusion_fraction[vox], 0.001])
             initial = [
                 ivim_pf,
                 self.diffusion_fit.evals[vox, 0], 
@@ -130,7 +130,7 @@ class IvimTensorModel(ReconstModel):
                 angles_perfusion[2]]
 
             lb = (0, 0, 0, 0, -np.pi, -np.pi, -np.pi, 0, 0, 0, -np.pi, -np.pi, -np.pi)
-            ub = (ivim_pf, 0.004, 0.004, 0.004, np.pi, np.pi, np.pi, 0.2, 0.2, 0.2, np.pi, np.pi, np.pi)
+            ub = (ivim_pf, np.inf, np.inf, np.inf, np.pi, np.pi, np.pi, np.inf, np.inf, np.inf, np.pi, np.pi, np.pi)
             try:
                 popt, pcov = curve_fit(self.model_eq2,
                                        self.gtab.bvals, 
