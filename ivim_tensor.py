@@ -79,7 +79,7 @@ class IvimTensorModel(ReconstModel):
         The model with fixed perfusion fraction
         """
         bvecs = self.gtab.bvecs
-        beta = self.perfusion_fraction
+        beta = self._ivim_pf
         Q, Q_star = _reconstruct_tensors(params)
         return _ivim_tensor_equation(beta, b, bvecs, Q_star, Q)
 
@@ -104,7 +104,7 @@ class IvimTensorModel(ReconstModel):
         self.ivim_fit = self.ivim_model.fit(mask_data)
         perfusion_data = mask_data[:, self.perfusion_idx]
         self.perfusion_fit = self.perfusion_model.fit(perfusion_data)
-        model_params = np.zeros((mask_data.shape[0], 13))
+        model_params = np.zeros((mask_data.shape[0], 12))
         for vox in tqdm(range(mask_data.shape[0])):
             # Calculate Euler angles for the diffusion fit:
             # We start by calculating the rotation matrix that will align 
@@ -113,9 +113,8 @@ class IvimTensorModel(ReconstModel):
             angles_dti = calc_euler(dt_evecs)
             perfusion_evecs = self.perfusion_fit.evecs[vox]
             angles_perfusion = calc_euler(perfusion_evecs)
-            ivim_pf = np.max([self.ivim_fit.perfusion_fraction[vox], 0.001])
+            ivim_pf = self.ivim_fit.perfusion_fraction[vox]
             initial = [
-                ivim_pf,
                 self.diffusion_fit.evals[vox, 0], 
                 self.diffusion_fit.evals[vox, 1], 
                 self.diffusion_fit.evals[vox, 2], 
@@ -129,10 +128,10 @@ class IvimTensorModel(ReconstModel):
                 angles_perfusion[1],
                 angles_perfusion[2]]
 
-            lb = (0, 0, 0, 0, -np.pi, -np.pi, -np.pi, 0, 0, 0, -np.pi, -np.pi, -np.pi)
-            ub = (ivim_pf, np.inf, np.inf, np.inf, np.pi, np.pi, np.pi, np.inf, np.inf, np.inf, np.pi, np.pi, np.pi)
+            lb = (0, 0, 0, -np.pi, -np.pi, -np.pi, 0, 0, 0, -np.pi, -np.pi, -np.pi)
+            ub = (np.inf, np.inf, np.inf, np.pi, np.pi, np.pi, np.inf, np.inf, np.inf, np.pi, np.pi, np.pi)
             try:
-                popt, pcov = curve_fit(self.model_eq2,
+                popt, pcov = curve_fit(self.model_eq1,
                                        self.gtab.bvals, 
                                        mask_data[vox]/np.mean(mask_data[vox, self.gtab.b0s_mask]), 
                                        p0=initial, bounds=(lb, ub))
@@ -152,10 +151,10 @@ class IvimTensorFit(ReconstFit):
         diffusion_params = np.zeros((self.model_params.shape[0], 12))
         self.perfusion_fraction = np.zeros(self.model_params.shape[0])
         for vox in range(self.model_params.shape[0]):
-            self.perfusion_fraction[vox] = self.model_params[vox, 0]
-            tensor_evecs, tensor_evals = _reconstruct_tensor(*self.model_params[vox, 1:7])        
+            self.perfusion_fraction[vox] = self.model.ivim_fit.perfusion_fraction[vox]
+            tensor_evecs, tensor_evals = _reconstruct_tensor(*self.model_params[vox, :6])        
             diffusion_params[vox] = np.hstack([tensor_evals, tensor_evecs.ravel()])
-            perfusion_evecs, perfusion_evals = _reconstruct_tensor(*self.model_params[vox, 7:])
+            perfusion_evecs, perfusion_evals = _reconstruct_tensor(*self.model_params[vox, 6:])
             perfusion_params[vox] = np.hstack([perfusion_evals, perfusion_evecs.ravel()])
             
         self.diffusion_fit = TensorFit(self.model.diffusion_model, diffusion_params)
