@@ -142,7 +142,7 @@ class IvimTensorModel(ReconstModel):
             angles_dti = calc_euler(dt_evecs)
             perfusion_evecs = self.perfusion_fit.evecs[vox]
             angles_perfusion = calc_euler(perfusion_evecs)
-            ivim_pf = self.ivim_fit.perfusion_fraction[vox]
+            self._ivim_pf = self.ivim_fit.perfusion_fraction[vox]
             initial = [
                 self.diffusion_fit.evals[vox, 0],
                 self.diffusion_fit.evals[vox, 1],
