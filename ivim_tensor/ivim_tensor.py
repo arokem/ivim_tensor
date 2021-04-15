@@ -58,8 +58,9 @@ def calc_euler(evecs):
     em = euler_matrix(*angles0)
     # Now, we need another rotation to bring the second eigenvector to the right
     # direction
-    ang1 = np.arccos(np.dot(evecs[1], em[1, :3]) /
-                     (np.linalg.norm(evecs[1]) * np.linalg.norm(em[1, :3])))
+    ang1 = np.arccos(
+        np.dot(evecs[1], em[1, :3])
+        / (np.linalg.norm(evecs[1]) * np.linalg.norm(em[1, :3])))
     rar = np.eye(4)
     rar[:3, :3] = rodrigues_axis_rotation(evecs[0], np.rad2deg(ang1))
 
@@ -174,8 +175,9 @@ class IvimTensorModel(ReconstModel):
                     self.gtab.bvals,
                     mask_data[vox]/np.mean(mask_data[vox, self.gtab.b0s_mask]),
                     p0=initial, bounds=(lb, ub),
-                    xtol=1e-20)
-            except ValueError:
+                    xtol=1e-3,
+                    maxfev=10000)
+            except RuntimeError:
                 popt = np.ones(len(initial)) * np.nan
             model_params[vox] = popt
 
