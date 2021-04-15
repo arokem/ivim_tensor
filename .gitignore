@@ -1,1 +1,5 @@
 .ipynb_checkpoints/
+ivim_tensor.egg-info/
+ivim_tensor/__pycache__/
+ivim_tensor/tests/__pycache__/
+ivim_tensor/version.py
