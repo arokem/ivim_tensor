@@ -175,7 +175,7 @@ class IvimTensorModel(ReconstModel):
                     self.gtab.bvals,
                     mask_data[vox]/np.mean(mask_data[vox, self.gtab.b0s_mask]),
                     p0=initial, bounds=(lb, ub),
-                    xtol=1e-3,
+                    xtol=1e-20,
                     maxfev=10000)
             except RuntimeError:
                 popt = np.ones(len(initial)) * np.nan
