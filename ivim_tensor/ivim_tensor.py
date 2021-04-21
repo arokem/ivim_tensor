@@ -160,7 +160,8 @@ class IvimTensorModel(ReconstModel):
             # Initial guess of perfusion fraction based on "vanilla" IVIM:
             self._ivim_pf = np.clip(np.min([self.ivim_fit.perfusion_fraction[vox],
                                     1-self.ivim_fit.perfusion_fraction[vox]]), 0, 1)
-
+            # If diffusivity is lower than this, it's not perfusion!
+            min_D_star = 0.003
             # Put together initial guess for 13 parameters of full model:
             initial = [
                 self._ivim_pf,
@@ -170,9 +171,9 @@ class IvimTensorModel(ReconstModel):
                 angles_dti[0],
                 angles_dti[1],
                 angles_dti[2],
-                self.perfusion_fit.evals[vox, 0],
-                self.perfusion_fit.evals[vox, 1],
-                self.perfusion_fit.evals[vox, 2],
+                np.max([self.perfusion_fit.evals[vox, 0], min_D_star]),
+                np.max([self.perfusion_fit.evals[vox, 1], min_D_star]),
+                np.max([self.perfusion_fit.evals[vox, 2], min_D_star]), 
                 angles_perfusion[0],
                 angles_perfusion[1],
                 angles_perfusion[2]]
@@ -181,7 +182,7 @@ class IvimTensorModel(ReconstModel):
             lb = (0,
                   0, 0, 0,
                   -np.pi, -np.pi, -np.pi,
-                  0, 0, 0,
+                  0.003, 0.003, 0.003,
                   -np.pi, -np.pi, -np.pi)
             ub = (0.5,
                   np.inf, np.inf, np.inf,
@@ -196,7 +197,7 @@ class IvimTensorModel(ReconstModel):
                     self.gtab.bvals,
                     mask_data[vox]/np.mean(mask_data[vox, self.gtab.b0s_mask]),
                     p0=initial, bounds=(lb, ub),
-                    xtol=1e-20,
+                    xtol=2.22e-16,
                     maxfev=10000)
             # Sometimes it can't fit the data:
             except RuntimeError:
