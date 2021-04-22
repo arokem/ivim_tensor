@@ -12,13 +12,15 @@ from tqdm import tqdm
 
 
 def _ivim_tensor_equation(beta, b, bvecs, Q_star, Q):
+    """ 
+    $\frac{S}{S_0} = \beta e^{-b \theta^t Q^{*}, \theta} + (1- \beta) e^{-b \theta^t Q \theta}$
+    """
     return beta * np.exp(-b * np.diag(bvecs @ Q_star @ bvecs.T)) + (1 - beta) * np.exp(-b * np.diag(bvecs @ Q @ bvecs.T))
 
 
 def _reconstruct_tensor(eval0, eval1, eval2, eul0, eul1, eul2):
     """
-    Reconstruct a quadratic form from a series of eigenvalues and
-    Euler rotations.
+    Reconstruct 12 tensor params from eigenvalues and Euler rotations.
     """
     R = euler_matrix(eul0, eul1, eul2)
     evecs = R[:3, :3]
@@ -28,8 +30,8 @@ def _reconstruct_tensor(eval0, eval1, eval2, eul0, eul1, eul2):
 
 def _reconstruct_tensors(params):
     """
-    Reconstruct two tensors based on 12 params (two sets of eigenvalues
-    and Euler angles).
+    Reconstruct two quadratic forms of tensors based on 
+    12 params (two sets of eigenvalues and Euler angles).
     """
     Q = vec_val_vect(*_reconstruct_tensor(
         params[0], params[1], params[2],
@@ -53,8 +55,11 @@ def calc_euler(evecs):
 
     """
     rot0 = np.eye(4)
+    # What is the rotation from the first eigenvector to eye(3)?
     rot0[:3, :3] = vec2vec_rotmat(evecs[0], np.eye(3)[0])
+    # Decompose (we only need the angles)
     scale, shear, angles0, translate, perspective = decompose_matrix(rot0)
+    # Convert angles to Euler matrix:
     em = euler_matrix(*angles0)
     # Now, we need another rotation to bring the second eigenvector to the right
     # direction
@@ -62,8 +67,9 @@ def calc_euler(evecs):
         np.dot(evecs[1], em[1, :3])
         / (np.linalg.norm(evecs[1]) * np.linalg.norm(em[1, :3])))
     rar = np.eye(4)
+    # The rar is a matrix that rotates for a given angle around a given
+    # vector:
     rar[:3, :3] = rodrigues_axis_rotation(evecs[0], np.rad2deg(ang1))
-
     # We combine these two rotations and decompose the combined matrix to give
     # us three Euler angles, which will be our parameters
     scale, shear, angles, translate, perspective = decompose_matrix(em @ rar)
@@ -87,13 +93,15 @@ class IvimTensorModel(ReconstModel):
         # Use two separate tensors for initial estimation:
         self.diffusion_idx = np.hstack([np.where(gtab.bvals > self.split_b_D),
                                         np.where(gtab.b0s_mask)]).squeeze()
-
+        
+        # The first tensor represents diffusion
         self.diffusion_gtab = gradient_table(
             self.gtab.bvals[self.diffusion_idx],
             self.gtab.bvecs[self.diffusion_idx])
 
         self.diffusion_model = TensorModel(self.diffusion_gtab)
 
+        # The second tensor represents perfusion:
         self.perfusion_idx = np.array(
             np.where(gtab.bvals <= self.split_b_D)).squeeze()
         self.perfusion_gtab = gradient_table(
@@ -101,12 +109,13 @@ class IvimTensorModel(ReconstModel):
             self.gtab.bvecs[self.perfusion_idx])
 
         self.perfusion_model = TensorModel(self.perfusion_gtab)
-
+        
+        # We'll need a "vanilla" IVIM model:
         self.ivim_model = IvimModel(self.gtab)
 
     def model_eq1(self, b, *params):
         """
-        The model with fixed perfusion fraction
+        The model with a fixed perfusion fraction
         """
         bvecs = self.gtab.bvecs
         beta = self._ivim_pf
@@ -115,7 +124,7 @@ class IvimTensorModel(ReconstModel):
 
     def model_eq2(self, b, *params):
         """
-        The full model, including perfusion fraction
+        The full model, including perfusion fraction as free parameter
         """
         beta = params[0]
         bvecs = self.gtab.bvecs
@@ -129,21 +138,31 @@ class IvimTensorModel(ReconstModel):
         if mask is None:
             mask = np.ones(data.shape[:-1], dtype=bool)
         mask_data = data[mask]
+        
+        # Fit diffusion tensor to diffusion-weighted data:
         diffusion_data = mask_data[:, self.diffusion_idx]
         self.diffusion_fit = self.diffusion_model.fit(diffusion_data)
+        # Fit "vanilla" IVIM to all of the data:
         self.ivim_fit = self.ivim_model.fit(mask_data)
+        # Fit perfusion tensor to perfusion-weighted data:
         perfusion_data = mask_data[:, self.perfusion_idx]
         self.perfusion_fit = self.perfusion_model.fit(perfusion_data)
+        # Pre-allocate parameters
         model_params = np.zeros((mask_data.shape[0], 13))
+        # Loop over voxels:
         for vox in tqdm(range(mask_data.shape[0])):
-            # Calculate Euler angles for the diffusion fit:
-            # We start by calculating the rotation matrix that will align
-            # the first eigenvector
+            # Extract initial guess of Euler angles for the diffusion fit:
             dt_evecs = self.diffusion_fit.evecs[vox]
             angles_dti = calc_euler(dt_evecs)
+            # Extract initial guess of Euler angles for the perfusion fit:
             perfusion_evecs = self.perfusion_fit.evecs[vox]
             angles_perfusion = calc_euler(perfusion_evecs)
-            self._ivim_pf = self.ivim_fit.perfusion_fraction[vox]
+            # Initial guess of perfusion fraction based on "vanilla" IVIM:
+            self._ivim_pf = np.clip(np.min([self.ivim_fit.perfusion_fraction[vox],
+                                    1-self.ivim_fit.perfusion_fraction[vox]]), 0, 1)
+            # If diffusivity is lower than this, it's not perfusion!
+            min_D_star = 0.003
+            # Put together initial guess for 13 parameters of full model:
             initial = [
                 self._ivim_pf,
                 self.diffusion_fit.evals[vox, 0],
@@ -152,31 +171,35 @@ class IvimTensorModel(ReconstModel):
                 angles_dti[0],
                 angles_dti[1],
                 angles_dti[2],
-                self.perfusion_fit.evals[vox, 0],
-                self.perfusion_fit.evals[vox, 1],
-                self.perfusion_fit.evals[vox, 2],
+                np.max([self.perfusion_fit.evals[vox, 0], min_D_star]),
+                np.max([self.perfusion_fit.evals[vox, 1], min_D_star]),
+                np.max([self.perfusion_fit.evals[vox, 2], min_D_star]), 
                 angles_perfusion[0],
                 angles_perfusion[1],
                 angles_perfusion[2]]
 
+            # Bounds on the parameters:
             lb = (0,
                   0, 0, 0,
                   -np.pi, -np.pi, -np.pi,
-                  0, 0, 0,
+                  0.003, 0.003, 0.003,
                   -np.pi, -np.pi, -np.pi)
             ub = (0.5,
                   np.inf, np.inf, np.inf,
                   np.pi, np.pi, np.pi,
                   np.inf, np.inf, np.inf,
                   np.pi, np.pi, np.pi)
+
+            # Fit the full model to the data with initial guess and bounds
             try:
                 popt, pcov = curve_fit(
                     self.model_eq2,
                     self.gtab.bvals,
                     mask_data[vox]/np.mean(mask_data[vox, self.gtab.b0s_mask]),
                     p0=initial, bounds=(lb, ub),
-                    xtol=1e-20,
+                    xtol=2.22e-16,
                     maxfev=10000)
+            # Sometimes it can't fit the data:
             except RuntimeError:
                 popt = np.ones(len(initial)) * np.nan
             model_params[vox] = popt
@@ -216,5 +239,5 @@ class IvimTensorFit(ReconstFit):
             Q = self.diffusion_fit.quadratic_form[vox]
             Q_star = self.perfusion_fit.quadratic_form[vox]
             prediction[vox] = _ivim_tensor_equation(
-                self.perfusion_fraction, b, bvecs, Q_star, Q)
+                self.perfusion_fraction[vox], b, bvecs, Q_star, Q)
         return prediction
