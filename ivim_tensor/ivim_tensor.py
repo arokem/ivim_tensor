@@ -9,6 +9,7 @@ from dipy.reconst.base import ReconstFit, ReconstModel
 from dipy.reconst.dti import (TensorModel, TensorFit)
 from dipy.reconst.ivim import IvimModel
 from tqdm import tqdm
+#from tqdm.asyncio import tqdm
 from concurrent.futures import ThreadPoolExecutor
 import asyncio
 import nest_asyncio
@@ -80,7 +81,7 @@ def calc_euler(evecs):
 
 
 class IvimTensorModel(ReconstModel):
-    def __init__(self, gtab, split_b_D=200.0, n_threads=8):
+    def __init__(self, gtab, split_b_D=200.0, n_threads=1):
         """
         Model to reconstruct an IVIM tensor
 
@@ -138,7 +139,7 @@ class IvimTensorModel(ReconstModel):
 
     def _inner_loop(self, vox_chunk):
         model_params = np.zeros((vox_chunk.shape[0], 13))        
-        for ii, vox in enumerate(tqdm(vox_chunk)):
+        for ii, vox in enumerate(vox_chunk):
             # Extract initial guess of Euler angles for the diffusion fit:
             dt_evecs = self.diffusion_fit.evecs[vox]
             angles_dti = calc_euler(dt_evecs)
@@ -231,7 +232,7 @@ class IvimTensorModel(ReconstModel):
                     )
                     for vox_chunk in vox_chunks
                 ]
-
+                
                 try:
                     model_params = np.concatenate(list(tqdm(loop.run_until_complete(asyncio.gather(*tasks)))))
                 finally:
