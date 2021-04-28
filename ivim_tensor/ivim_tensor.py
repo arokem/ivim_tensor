@@ -9,7 +9,10 @@ from dipy.reconst.base import ReconstFit, ReconstModel
 from dipy.reconst.dti import (TensorModel, TensorFit)
 from dipy.reconst.ivim import IvimModel
 from tqdm import tqdm
-
+from concurrent.futures import ThreadPoolExecutor
+import asyncio
+import nest_asyncio
+nest_asyncio.apply()
 
 def _ivim_tensor_equation(beta, b, bvecs, Q_star, Q):
     """ 
@@ -77,7 +80,7 @@ def calc_euler(evecs):
 
 
 class IvimTensorModel(ReconstModel):
-    def __init__(self, gtab, split_b_D=200.0):
+    def __init__(self, gtab, split_b_D=200.0, n_threads=8):
         """
         Model to reconstruct an IVIM tensor
 
@@ -112,6 +115,8 @@ class IvimTensorModel(ReconstModel):
         
         # We'll need a "vanilla" IVIM model:
         self.ivim_model = IvimModel(self.gtab)
+        # How many threads in parallel execution:
+        self.n_threads = n_threads
 
     def model_eq1(self, b, *params):
         """
@@ -131,26 +136,9 @@ class IvimTensorModel(ReconstModel):
         Q, Q_star = _reconstruct_tensors(params[1:])
         return _ivim_tensor_equation(beta, b, bvecs, Q_star, Q)
 
-    def fit(self, data, mask=None):
-        """
-        Fit the IVIM tensor model
-        """
-        if mask is None:
-            mask = np.ones(data.shape[:-1], dtype=bool)
-        mask_data = data[mask]
-        
-        # Fit diffusion tensor to diffusion-weighted data:
-        diffusion_data = mask_data[:, self.diffusion_idx]
-        self.diffusion_fit = self.diffusion_model.fit(diffusion_data)
-        # Fit "vanilla" IVIM to all of the data:
-        self.ivim_fit = self.ivim_model.fit(mask_data)
-        # Fit perfusion tensor to perfusion-weighted data:
-        perfusion_data = mask_data[:, self.perfusion_idx]
-        self.perfusion_fit = self.perfusion_model.fit(perfusion_data)
-        # Pre-allocate parameters
-        model_params = np.zeros((mask_data.shape[0], 13))
-        # Loop over voxels:
-        for vox in tqdm(range(mask_data.shape[0])):
+    def _inner_loop(self, vox_chunk):
+        model_params = np.zeros((vox_chunk.shape[0], 13))        
+        for ii, vox in enumerate(tqdm(vox_chunk)):
             # Extract initial guess of Euler angles for the diffusion fit:
             dt_evecs = self.diffusion_fit.evecs[vox]
             angles_dti = calc_euler(dt_evecs)
@@ -161,13 +149,13 @@ class IvimTensorModel(ReconstModel):
             self._ivim_pf = np.clip(np.min([self.ivim_fit.perfusion_fraction[vox],
                                     1-self.ivim_fit.perfusion_fraction[vox]]), 0, 1)
             # If diffusivity is lower than this, it's not perfusion!
-            min_D_star = 0.003
+            min_D_star = 0.003            
             # Put together initial guess for 13 parameters of full model:
             initial = [
                 self._ivim_pf,
-                self.diffusion_fit.evals[vox, 0],
-                self.diffusion_fit.evals[vox, 1],
-                self.diffusion_fit.evals[vox, 2],
+                np.min([self.diffusion_fit.evals[vox, 0], min_D_star]),
+                np.min([self.diffusion_fit.evals[vox, 1], min_D_star]),
+                np.min([self.diffusion_fit.evals[vox, 2], min_D_star]),
                 angles_dti[0],
                 angles_dti[1],
                 angles_dti[2],
@@ -185,7 +173,7 @@ class IvimTensorModel(ReconstModel):
                   0.003, 0.003, 0.003,
                   -np.pi, -np.pi, -np.pi)
             ub = (0.5,
-                  np.inf, np.inf, np.inf,
+                  0.003, 0.003, 0.003,
                   np.pi, np.pi, np.pi,
                   np.inf, np.inf, np.inf,
                   np.pi, np.pi, np.pi)
@@ -195,15 +183,62 @@ class IvimTensorModel(ReconstModel):
                 popt, pcov = curve_fit(
                     self.model_eq2,
                     self.gtab.bvals,
-                    mask_data[vox]/np.mean(mask_data[vox, self.gtab.b0s_mask]),
+                    self.mask_data[vox]/np.mean(self.mask_data[vox, self.gtab.b0s_mask]),
                     p0=initial, bounds=(lb, ub),
-                    xtol=2.22e-16,
+                    xtol=0.05,
+                    ftol=0.05,
                     maxfev=10000)
             # Sometimes it can't fit the data:
             except RuntimeError:
                 popt = np.ones(len(initial)) * np.nan
-            model_params[vox] = popt
+            model_params[ii] = popt
 
+        return model_params
+
+    def fit(self, data, mask=None):
+        """
+        Fit the IVIM tensor model
+        """
+        if mask is None:
+            mask = np.ones(data.shape[:-1], dtype=bool)
+        self.mask_data = data[mask]
+        
+        # Fit diffusion tensor to diffusion-weighted data:
+        diffusion_data = self.mask_data[:, self.diffusion_idx]
+        self.diffusion_fit = self.diffusion_model.fit(diffusion_data)
+        # Fit "vanilla" IVIM to all of the data:
+        self.ivim_fit = self.ivim_model.fit(self.mask_data)
+        # Fit perfusion tensor to perfusion-weighted data:
+        perfusion_data = self.mask_data[:, self.perfusion_idx]
+        self.perfusion_fit = self.perfusion_model.fit(perfusion_data)
+        # Pre-allocate parameters
+        #model_params = np.zeros((self.mask_data.shape[0], 13))
+        
+        voxel_indices = np.arange(self.mask_data.shape[0])
+        
+        if self.n_threads > 1:
+            # Loop over voxels:
+            vox_chunks = np.array_split(voxel_indices, self.n_threads)
+
+            with ThreadPoolExecutor(max_workers=self.n_threads) as executor:
+                loop = asyncio.new_event_loop()
+
+                tasks = [
+                    loop.run_in_executor(
+                        executor,
+                        self._inner_loop,
+                        vox_chunk,
+                    )
+                    for vox_chunk in vox_chunks
+                ]
+
+                try:
+                    model_params = np.concatenate(list(tqdm(loop.run_until_complete(asyncio.gather(*tasks)))))
+                finally:
+                    loop.close()
+        else: 
+            model_params = self._inner_loop(voxel_indices)
+            
         return IvimTensorFit(self, model_params)
 
 
